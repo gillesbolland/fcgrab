@@ -33,6 +33,9 @@ No installation is required other than ensuring FFmpeg and mediainfo are correct
 ### Notes
 
 This script assumes the original video files were captured using dvgrab from MiniDV camcorders via FireWire (iLink) connection.
+
 The transcoding process ensures compatibility with Final Cut Pro and other Apple solutions by utilizing the hevc_videotoolbox codec and the correct metadata in FFmpeg.
+
 The resulting .mov files are stored in a sub-directory named "Transcoded Media", while the original .dv and .m2t files are moved to "Original Media".
+
 After running the script, you will be prompted whether to keep or delete the original video files.
