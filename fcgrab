@@ -116,7 +116,7 @@ for FILE in "$DIR"/*.{dv,m2t}; do
         if [[ "$EXT" == "m2t" ]]; then
             BITRATE="20M"
         elif [[ "$EXT" == "dv" ]]; then
-            BITRATE="10M"
+            BITRATE="12M"
         else
             echo "Unsupported file type: $EXT"
             continue
