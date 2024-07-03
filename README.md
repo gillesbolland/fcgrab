@@ -23,8 +23,6 @@ No installation is required other than ensuring FFmpeg and mediainfo are correct
 
 ### Usage Example
 
-    ```bash
-    # Convert a directory of DV and HDV files into a Final Cut Camera Archive
     ./fcgrab /path/to/video/files "Sony HVR-V1E"
 
 ### Options
