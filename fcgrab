@@ -1,0 +1,238 @@
+#!/bin/bash
+
+# Final Cut Camera Archive Creator
+# Usage: fcgrab [options] <directory> [<camera model>]
+
+function show_help {
+    echo "Usage: fcgrab [options] <directory> [<camera model>]"
+    echo
+    echo "Options:"
+    echo "  --help           Show this help message"
+    echo
+    echo "Arguments:"
+    echo "  directory        Path to the directory containing .dv or .m2t files"
+    echo "  camera model     (Optional) Name of the camera model (e.g., 'Sony HVR-V1E')"
+    echo
+    echo "Description:"
+    echo "  Converts a directory containing DV or HDV video clips captured with dvgrab"
+    echo "  into a 'Final Cut Camera Archive'."
+    echo "  Transcodes video files into QuickTime format with metadata suitable for Apple environment."
+    echo "  Original creation dates are extracted and applied to the new files."
+}
+
+
+if [[ $1 == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ $# -lt 1 ]; then
+    echo "Error: Missing required arguments"
+    show_help
+    exit 1
+fi
+
+DIR="${1%/}"  # Remove trailing slash if present
+
+# Determine camera model based on media type
+if [ $# -lt 2 ]; then
+    # Check if there are .m2t files to determine camera model
+    if ls "$DIR"/*.m2t 1> /dev/null 2>&1; then
+        CAMERA_MODEL="HDV-VCR"
+    elif ls "$DIR"/*.dv 1> /dev/null 2>&1; then
+        CAMERA_MODEL="DV-VCR"
+    else
+        echo "Error: Cannot determine camera model. No .dv or .m2t files found."
+        exit 1
+    fi
+else
+    CAMERA_MODEL="$2"
+fi
+
+ARCHIVE_UUID=$(uuidgen)
+CLIP_IDS=()
+PLIST_FILE="$DIR/FCArchMetadata.plist"
+OLDEST_DATE=""
+OLDEST_FILE=""
+
+# Ensure ffmpeg is installed
+if ! command -v ffmpeg &> /dev/null; then
+    echo "ffmpeg could not be found. Please install ffmpeg first."
+    exit 1
+fi
+
+# Ensure mediainfo is installed
+if ! command -v mediainfo &> /dev/null; then
+    echo "mediainfo could not be found. Please install mediainfo first."
+    exit 1
+fi
+
+# Function to extract timestamp from mediainfo
+function extract_timestamp {
+    local FILE="$1"
+    local TIMESTAMP=""
+
+    # Check Recorded date
+    TIMESTAMP=$(mediainfo "--Inform=General;%Recorded_Date%" "$FILE" | grep -Eo '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n 1)
+
+    # If not found, check Start time
+    if [[ -z "$TIMESTAMP" ]]; then
+        TIMESTAMP=$(mediainfo "--Inform=General;%Start_Time%" "$FILE" | grep -Eo '^[0-9]{2}:[0-9]{2}:[0-9]{2}' | head -n 1)
+    fi
+
+    echo "$TIMESTAMP"
+}
+
+# Process each .dv and .m2t file
+shopt -s nullglob
+for FILE in "$DIR"/*.{dv,m2t}; do
+    if [[ -f $FILE ]]; then
+        FILENAME=$(basename "$FILE")
+        EXT="${FILENAME##*.}"
+        CLIP_UUID=$(uuidgen)
+
+        # Extract creation date with mediainfo
+        CREATION_DATE=$(extract_timestamp "$FILE")
+
+        # If mediainfo fails, extract date from filename
+        if [[ -z $CREATION_DATE ]]; then
+            echo "mediainfo failed for $FILE, extracting date from filename."
+            if [[ "$FILENAME" =~ ([0-9]{4})[^0-9]*([0-9]{2})[^0-9]*([0-9]{2})[^0-9]*([0-9]{2})[^0-9]*([0-9]{2})[^0-9]*([0-9]{2}) ]]; then
+                CREATION_DATE="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}"
+            else
+                echo "Failed to extract date from filename for $FILE"
+                continue
+            fi
+        fi
+
+        # Convert date to format required for filename
+        FORMATTED_DATE=$(date -j -f "%Y-%m-%d %H:%M:%S" "$CREATION_DATE" "+%Y-%m-%d %H_%M_%S" 2>/dev/null)
+        if [[ $? -ne 0 ]]; then
+            echo "Failed to format date for $FILE"
+            continue
+        fi
+
+        # Determine bitrate based on file type
+        if [[ "$EXT" == "m2t" ]]; then
+            BITRATE="20M"
+        elif [[ "$EXT" == "dv" ]]; then
+            BITRATE="10M"
+        else
+            echo "Unsupported file type: $EXT"
+            continue
+        fi
+
+        # Create Original Media directory if it doesn't exist
+        ORIGINAL_MEDIA_DIR="$DIR/Original Media"
+        mkdir -p "$ORIGINAL_MEDIA_DIR"
+
+        # Move original file to Original Media directory
+        mv "$FILE" "$ORIGINAL_MEDIA_DIR/"
+
+        # Create Transcoded Media directory if it doesn't exist
+        TRANSCODED_MEDIA_DIR="$DIR/Transcoded Media"
+        mkdir -p "$TRANSCODED_MEDIA_DIR"
+
+        # New file name and path for transcoded file
+        NEW_FILENAME="$TRANSCODED_MEDIA_DIR/${FORMATTED_DATE}.mov"
+
+        # Convert to Quicktime container using ffmpeg with hevc_videotoolbox
+        if [[ "$EXT" == "dv" ]]; then
+            ffmpeg -y -i "$ORIGINAL_MEDIA_DIR/$FILENAME" \
+                   -vf "bwdif=mode=send_frame:parity=bff" \
+                   -c:v "hevc_videotoolbox" -b:v "$BITRATE" -tag:v "hvc1" -pix_fmt "yuv420p" -color_range pc \
+                   -c:a "aac" -b:a "256k" -ar 48000 -ac 2 -movflags +faststart -write_tmcd 0 \
+                   -metadata creation_time="$CREATION_DATE" \
+                   -loglevel warning \
+                   "$NEW_FILENAME" < /dev/null
+        else
+            ffmpeg -y -i "$ORIGINAL_MEDIA_DIR/$FILENAME" \
+                   -vf "bwdif=mode=send_frame:parity=bff" \
+                   -c:v "hevc_videotoolbox" -b:v "$BITRATE" -tag:v "hvc1" -pix_fmt "yuv420p" \
+                   -c:a "aac" -b:a "256k" -ar 48000 -ac 2 -movflags +faststart -write_tmcd 0 \
+                   -metadata creation_time="$CREATION_DATE" \
+                   -loglevel warning \
+                   "$NEW_FILENAME" < /dev/null
+        fi
+
+        if [[ $? -ne 0 ]]; then
+            echo "Failed to convert $FILE to QuickTime format using ffmpeg"
+            continue
+        fi
+
+        # Update file creation date
+        touch -t "$(date -j -f "%Y-%m-%d %H:%M:%S" "$CREATION_DATE" "+%Y%m%d%H%M.%S" 2>/dev/null)" "$NEW_FILENAME"
+
+        # Store the clip UUID
+        CLIP_IDS+=("$CLIP_UUID")
+
+        # Track the oldest date
+        if [[ -z "$OLDEST_DATE" || "$CREATION_DATE" < "$OLDEST_DATE" ]]; then
+            OLDEST_DATE="$CREATION_DATE"
+            OLDEST_FILE="$NEW_FILENAME"
+        fi
+
+        echo "Processed $FILE -> $NEW_FILENAME"
+    fi
+done
+
+if [[ -z "$OLDEST_DATE" ]]; then
+    echo "No valid files found in the directory."
+    exit 1
+fi
+
+# Format the oldest date for plist
+ARCHIVE_DATE=$(date -j -f "%Y-%m-%d %H:%M:%S" "$OLDEST_DATE" "+%Y-%m-%d %H:%M:%S %z" 2>/dev/null)
+if [[ $? -ne 0 ]]; then
+    echo "Failed to format date for plist."
+    exit 1
+fi
+
+# Create FCArchMetadata.plist
+{
+    echo '<?xml version="1.0" encoding="UTF-8"?>'
+    echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    echo '<plist version="1.0">'
+    echo '<dict>'
+    echo '  <key>UUID</key>'
+    echo "  <string>$ARCHIVE_UUID</string>"
+    echo '  <key>archiveDate</key>'
+    echo "  <string>$ARCHIVE_DATE</string>"
+    echo '  <key>archiveVersion</key>'
+    echo '  <real>1</real>'
+    echo '  <key>clipIDs</key>'
+    echo '  <array>'
+    for ID in "${CLIP_IDS[@]}"; do
+        echo '    <dict>'
+        echo '      <key>clipID</key>'
+        echo "      <string>$ID</string>"
+        echo '    </dict>'
+    done
+    echo '  </array>'
+    echo '  <key>deviceName</key>'
+    echo "  <string>$CAMERA_MODEL</string>"
+    echo '  <key>isCapture</key>'
+    echo '  <true/>'
+    echo '</dict>'
+    echo '</plist>'
+} > "$PLIST_FILE"
+
+# Ask user to keep original files
+read -rp "Do you want to keep the original files? (Y/n): " KEEP_ORIGINAL
+KEEP_ORIGINAL=${KEEP_ORIGINAL:-Y}  # Default to Y if user presses Enter without input
+
+if [[ $KEEP_ORIGINAL =~ ^[nN] ]]; then
+    echo "Deleting original files..."
+    rm -rf "$ORIGINAL_MEDIA_DIR"
+    echo "Original files deleted."
+else
+    echo "Original files were not deleted."
+fi
+
+# Rename directory to .fcarch and set Finder attribute
+mv "$DIR" "$DIR.fcarch"
+xattr -wx com.apple.FinderInfo "0000000000000000001000000000000000000000000000000000000000000000" "$DIR.fcarch"
+
+echo "Archive created successfully."
+
+exit 0
