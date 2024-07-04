@@ -4,7 +4,7 @@
 
 ## Features
 
-- Converts DV (.dv) and HDV (.m2t) video files into lossless QuickTime (.mov) format suitable for Final Cut Pro.
+- Converts DV (.dv) and HDV (.m2t) video files into QuickTime (.mov) format suitable for Final Cut Pro.
 - Extracts creation dates from original video files and applies them to the transcoded files and its metadata.
 - Creates an `FCArchMetadata.plist` file with metadata required for Final Cut Pro projects.
 - Uses FFmpeg with `hevc_videotoolbox` codec for fast transcoding optimized for macOS environment.
